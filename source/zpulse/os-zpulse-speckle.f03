@@ -43,6 +43,7 @@ integer, parameter :: p_isi      = 3
 integer, parameter :: p_ssd      = 4
 integer, parameter :: p_file     = 5
 integer, parameter :: p_cpurp    = 6
+integer, parameter :: p_zero     = 7
 
 ! SSD specific
 integer, parameter :: p_max_nfm  = 8     ! maximum number of sinusoidal phase modulation
@@ -77,6 +78,11 @@ type, extends(t_zpulse_wall) :: t_zpulse_speckle
 !  real (p_double) :: per_w0(2)
   real (p_double) :: k_perp(2)
   !character(len = p_max_filename_len)      :: filename
+
+  ! perpendicular profile control
+  type(t_fparser)                      :: per_math_func
+  integer                              :: per_gaussian_order
+  real (p_double), dimension(per_ndim) :: per_width
 
   class (t_random), pointer :: rbuff => null()   ! rng for (complex) phase modulation
   class (t_random), pointer :: rstud => null()   ! rng for amplitude modulation
@@ -176,12 +182,12 @@ subroutine ar1proc_2d( val, b, sigma, n_val, prng )
   implicit none
   real (p_double), dimension(1:,1:), intent(inout) :: val
   real (p_double),                   intent(in)    :: b, sigma
-  integer, dimension(1:2),           intent(in)    :: n_val
+  integer, dimension(1:per_ndim),    intent(in)    :: n_val
   class(t_random), pointer,          intent (in)   :: prng
 
   integer :: i1, i2
   do i1 = 1, n_val(1)
-    do i2 = 1, n_val(2)
+    do i2 = 1, n_val(per_ndim)
       val(i1, i2) = ar1process(val(i1, i2), b, sigma, prng)
     end do
   end do
@@ -221,9 +227,9 @@ subroutine fastforward_buff1d2( buff_1d, n, tn, ts, b, sigma, prng )
     ind2 = mod(ind1 + n - 1, n) + 1
     buff_1d(1, ind1) = ar1process( buff_1d(1, ind2), b(1), sigma(1), prng )
 
-    ind1 = mod(ts(2) + i, n) + 1
+    ind1 = mod(ts(per_ndim) + i, n) + 1
     ind2 = mod(ind1 + n - 1, n) + 1
-    buff_1d(2, ind1) = ar1process( buff_1d(2, ind2), b(2), sigma(2), prng )
+    buff_1d(2, ind1) = ar1process( buff_1d(2, ind2), b(per_ndim), sigma(per_ndim), prng )
   enddo
 
 end subroutine fastforward_buff1d2
@@ -268,10 +274,10 @@ subroutine fastforward_lorentzian_psd( this, tn )
 
       do ti = 1, tn
         call ar1proc( this%pp_3d, this%ar1_rho(1), &
-                        this%ar1_sigma(1), this%n_speckle(1:2), this%rbuff )
+                        this%ar1_sigma(1), this%n_speckle(1:per_ndim), this%rbuff )
       enddo
       do i = 1, this%n_speckle(1)
-        do j = 1, this%n_speckle(2)
+        do j = 1, this%n_speckle(per_ndim)
           this%buff_3d(1, i, j, 1) = cos( this%phasemod_amplitude(1,1) * this%pp_3d(i, j) )
           this%buff_3d(2, i, j, 1) = sin( this%phasemod_amplitude(1,1) * this%pp_3d(i, j) )
         enddo
@@ -282,7 +288,7 @@ subroutine fastforward_lorentzian_psd( this, tn )
       do ti = 1, tn
         do i = 1, 2
           call ar1proc( this%buff_3d(i, :, :, 1), this%ar1_rho(1), &
-                          this%ar1_sigma(1), this%n_speckle(1:2), this%rbuff )
+                          this%ar1_sigma(1), this%n_speckle(1:per_ndim), this%rbuff )
         enddo
       enddo
 
@@ -310,8 +316,10 @@ subroutine new_phase_plate( this )
       if (this%speckle_type == p_rpp) then
         this%pp_2d(i) =  (sign(1.0_p_double, this % rbuff % genrand_gaussian()) &
                             + 1.0_p_double) * pi_2
-      else
+      else if (this%speckle_type == p_cpp) then
         this%pp_2d(i) =  this % rbuff % genrand_gaussian() * PI
+      else
+        this%pp_2d(i) = 0.0
       endif
 
       this%buff_2d(1, i, 1) = cos(this%pp_2d(i))
@@ -322,13 +330,15 @@ subroutine new_phase_plate( this )
   case ( 3 )
 
     do i = 1, this%n_speckle(1)
-      do j = 1, this%n_speckle(2)
+      do j = 1, this%n_speckle(per_ndim)
 
         if (this%speckle_type == p_rpp) then
           this%pp_3d(i,j) =  (sign(1.0_p_double, this % rbuff % genrand_gaussian()) &
                                  + 1.0_p_double) * pi_2
-        else
+        else if (this%speckle_type == p_cpp) then
           this%pp_3d(i,j) =  this % rbuff % genrand_gaussian() * PI
+	else
+	  this%pp_3d(i,j) = 0.0
         endif
 
         this%buff_3d(1, i, j, 1) = cos(this%pp_3d(i, j))
@@ -473,10 +483,10 @@ subroutine new_gaussian_psd_timeseries( this )
   case ( 3 )
 
     if ( this%speckle_type == p_ssd ) then
-      if ( this%laser_bandwidth(2) > 0 ) then
+      if ( this%laser_bandwidth(per_ndim) > 0 ) then
 
         do i = 1, nt
-          profile(i) = exp( - c1(2) * ((i-(nt-1)*0.5)*df)**2 )
+          profile(i) = exp( - c1(per_ndim) * ((i-(nt-1)*0.5)*df)**2 )
         enddo
         do i = 1, nt
           this%buff_1d(2, i) =  this% rbuff % genrand_gaussian() * profile(i)
@@ -503,7 +513,7 @@ subroutine new_gaussian_psd_timeseries( this )
     else
 
       do k = 1, nt
-        do j = 1, this%n_speckle(2)
+        do j = 1, this%n_speckle(per_ndim)
           do i = 1, this%n_speckle(1)
             this%buff_3d(1, i, j, k) =  this% rbuff % genrand_gaussian() * profile(k)
             this%buff_3d(2, i, j, k) =  this% rbuff % genrand_gaussian() * profile(k)
@@ -511,22 +521,22 @@ subroutine new_gaussian_psd_timeseries( this )
         enddo
       enddo
 
-      call ifft( this%buff_3d, (/ nt, this%n_speckle(1), this%n_speckle(2) /) )
+      call ifft( this%buff_3d, (/ nt, this%n_speckle(1), this%n_speckle(per_ndim) /) )
 
       total = 0
       do k = 1, nt
-        do j = 1, this%n_speckle(2)
+        do j = 1, this%n_speckle(per_ndim)
           do i = 1, this%n_speckle(1)
             total = total + this%buff_3d(1, i, j, k)**2 + this%buff_3d(2, i, j, k)**2
           enddo
         enddo
       enddo
       this%buff_3d = this%buff_3d / sqrt(total / &
-                      &  real(nt*this%n_speckle(1)*this%n_speckle(2), p_double))
+                      &  real(nt*this%n_speckle(1)*this%n_speckle(per_ndim), p_double))
 
       if ( this%speckle_type == p_cpurp ) then
         do k = 1, nt
-          do j = 1, this%n_speckle(2)
+          do j = 1, this%n_speckle(per_ndim)
             do i = 1, this%n_speckle(1)
               this%buff_3d(1, i, j, k) = cos( this%phasemod_amplitude(1,1) * &
                               &               this%buff_3d(1,i,j,k) )
@@ -590,11 +600,11 @@ subroutine update_speckle_pattern_3d( wall_3d, per_mode_3d, phase, ns, lnx )
 
   wall_3d(:,:,:) = 0.0_p_double
 
-  do ind2 = 1, lnx(2)
+  do ind2 = 1, lnx(per_ndim)
   do ind1 = 1, lnx(1)
     i = 1
 
-    do m = 1, ns(2)
+    do m = 1, ns(per_ndim)
     do l = 1, ns(1)
       wall_3d(1,ind1,ind2) = wall_3d(1,ind1,ind2) + per_mode_3d(1,i,ind1,ind2) * phase(1, l, m) - &
                       &      per_mode_3d(2,i,ind1,ind2) * phase(2, l, m)
@@ -657,10 +667,10 @@ subroutine update_ssd_buffer_3d( buff_3d, pp_3d, pmp_3d, phasemod_amplitude, pm_
   integer :: i, j, k, ind1
   real(p_double) :: ph
 
-  do j = 1, ns(2)
+  do j = 1, ns(per_ndim)
     do i = 1, ns(1)
       ph = pp_3d(i,j)
-      do k = 1, 2
+      do k = 1, per_ndim
         do ind1 = 1, nfm(k)
           ph = phasemod_amplitude(ind1,k) * sin(pm_bw(ind1,k) * (inj_time + beamlet_delay(k) * (i - 1) + pmp_3d(ind1, k))) + ph
         enddo
@@ -693,11 +703,11 @@ end subroutine new_modulation_phase_2d
 subroutine new_modulation_phase_3d( pmp_3d, nfm, prng )
   implicit none
   real(p_double), dimension(1:,1:), intent(inout) :: pmp_3d
-  integer, dimension(1:2),          intent(in)    :: nfm
+  integer, dimension(1:per_ndim),   intent(in)    :: nfm
   class(t_random), pointer,         intent (in)   :: prng
 
   integer :: k, l
-  do l = 1, 2
+  do l = 1, per_ndim
     do k = 1, nfm(l)
       pmp_3d(k, l) = prng%genrand_gaussian() * pi
     enddo
@@ -760,19 +770,17 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
 
   real(p_double) :: tenv_rise, tenv_flat, tenv_fall
   real(p_double) :: tenv_duration, tenv_range
-  character(len = p_max_expr_len) :: tenv_math_func
+  character(len = p_max_expr_len) :: tenv_math_func, per_math_func
 
   real(p_double) :: duty_cycle, stud_jitter
 
   ! Beam profile
-  !character(len=16) :: per_type
   real(p_double), dimension(2) :: spatial_tilt
-  real(p_double), dimension(2) :: per_center
+  real(p_double), dimension(2) :: per_center, per_width
 
-  real(p_double), dimension(2) :: per_w0, per_fwhm, per_focus
+  real(p_double), dimension(2) :: per_w0
   real(p_double), dimension(2) :: theta
 
-  integer, dimension(2) :: per_tem_mode
 
   ! real(p_double), dimension(2,2) :: per_w0_asym, per_fwhm_asym, per_focus_asym
   ! real(p_double), dimension(2) :: per_asym_trans
@@ -788,10 +796,10 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
   logical               :: if_dump_speckle
   integer, dimension(per_ndim) :: n_speckle, nfm, color_cycle
   real(p_double), dimension(p_max_nfm, per_ndim) :: fm, phasemod_amplitude
-  Character(len=16)  :: speckle_type, bandwidth_type
+  Character(len=16)  :: speckle_type, bandwidth_type, per_type
   real(p_double)     :: recurrence_time, stud_duration
   real(p_double)     :: dt_update_speckle, dt_update_pol
-  integer            :: rseed_phase, rseed_stud
+  integer            :: rseed_phase, rseed_stud, per_gaussian_order
   !character(len = p_max_filename_len) :: filename
   real(p_double), dimension(per_ndim) :: laser_bandwidth, beamlet_delay
 
@@ -805,7 +813,8 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
         chirp_order, chirp_coefs, chirp_period, tenv_fwhm, &
         tenv_type, tenv_rise, tenv_flat, tenv_fall, lon_focus, &
         tenv_duration, tenv_range, tenv_math_func, spatial_tilt, &
-        per_center, per_w0, theta, &
+        per_center, per_w0, theta, per_width, per_type, &
+        per_math_func, per_gaussian_order, &
         !per_fwhm, &
         !per_w0_asym, per_fwhm_asym, per_focus_asym, per_asym_trans, &
         !per_n, per_0clip, per_kt, per_tem_mode, &
@@ -836,6 +845,7 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
 
   propagation    = "forward"
   direction      = 1
+  per_width(:)   = - huge(1.0_p_double)
 
   tenv_type      = "polynomial"
 
@@ -848,6 +858,7 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
   tenv_duration  = 0.0_p_double
   tenv_range     = - huge(1.0_p_double)
   tenv_math_func = "NO_FUNCTION_SUPPLIED!"
+  per_math_func  = "NO_FUNCTION_SUPPLIED!"
 
   duty_cycle     = 50.0_p_double
   stud_jitter    = 0.0_p_double
@@ -859,10 +870,8 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
 
   per_center     = - huge(1.0_p_double)
 
-  per_w0         = 0.0_p_double
-  per_fwhm       = 0.0_p_double
-  per_focus      = - huge(1.0_p_double)
-  per_tem_mode   = 0 ! tem mode, integer, default = 0,0
+  per_w0         = -1.0_p_double
+  per_gaussian_order =  2
 
 !  per_w0_asym    = 0.0_p_double
 !  per_fwhm_asym  = 0.0_p_double
@@ -881,6 +890,7 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
   n_speckle          = 1
   speckle_type       = "default"
   bandwidth_type     = 'default'
+  per_type           = "uniform"
   laser_bandwidth    = 0.0_p_double
   phasemod_amplitude = 2 * PI  ! should be > pi
   dt_update_speckle  = - huge(1.0_p_double)
@@ -988,7 +998,6 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
     stop
   endif
   this%direction = direction
-
 
   ! spatial tilt
   if ( p_x_dim > 1 ) then
@@ -1106,7 +1115,6 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
     stop
   end select
 
-
   do i = 1, p_x_dim - 1
     if ( n_speckle(i) < 1 ) then
       if (mpi_node() == 0) then
@@ -1119,6 +1127,73 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
     endif
   enddo
   this%n_speckle = n_speckle
+
+
+  ! perpendicular porfile settings
+  select case ( to_lower(trim(per_type)) )
+  case ("sinc", "gaussian")
+    if ( ( p_x_dim > 1 .and. per_w0(1) <= 0. ) .or. &
+         ( p_x_dim == 3 .and. per_w0(per_ndim) <= 0 ) ) then
+      if (mpi_node() ==  0) then
+        write(0,*)  ''
+        write(0,*)  '   Error in zpulse_speckle parameters'
+        write(0,*)  '   per_w0 must be greater than zero'
+        write(0,*)  '   aborting...'
+      endif
+      stop
+    endif
+    this%per_w0(1:2) = per_w0(1:2)
+
+    if ( to_lower(trim(per_type)) == "sinc" ) then
+      this%per_type =  p_sinc
+    else  ! gaussian profile
+      this%per_type =  p_supergaussian
+      this%per_gaussian_order = per_gaussian_order 
+    endif
+
+  case ("math")
+    this%per_type = p_math_func
+    if ( p_x_dim == 2 ) then
+      if ( this%direction == 1 ) then
+        call setup(this%per_math_func, trim(per_math_func), (/'x2'/), ierr)
+      else
+        call setup(this%per_math_func, trim(per_math_func), (/'x1'/), ierr)
+      endif
+
+    else if ( p_x_dim == 3 ) then
+      select case ( this%direction )
+      case ( 1 )
+        call setup(this%per_math_func, trim(per_math_func), (/'x2', 'x3'/), ierr)
+      case ( 2 )
+        call setup(this%per_math_func, trim(per_math_func), (/'x1', 'x3'/), ierr)
+      case ( 3 )
+        call setup(this%per_math_func, trim(per_math_func), (/'x1', 'x2'/), ierr)
+      end select
+    endif
+
+    if (ierr /= 0) then
+      if ( mpi_node() == 0 ) then
+        write(0,*)  ''
+        write(0,*)  '   Error in zpulse_speckle parameters'
+        write(0,*)  '   Supplied per_math_func failed to compile'
+        write(0,*)  '   aborting...'
+      endif
+      stop
+    endif
+
+  case ("uniform", "default")
+    this%per_type =  p_plane
+
+  case default
+    if ( mpi_node() == 0 ) then
+      write(0,*)  ''
+      write(0,*)  '   Error in zpulse_speckle parameters'
+      write(0,*)  '   per_type must be either "sinc", "gaussian", "math", '
+      write(0,*)  '   "uniform", or "default" (same as uniform) '
+      write(0,*)  '   aborting...'
+    endif
+    stop
+  end select
 
   ! Set default per_center values (this needs to happen after reading the direction )
   if ( p_x_dim > 1 ) then
@@ -1140,6 +1215,33 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
     endif
    endif
   endif
+
+  ! Set default per_width values (this needs to happen after reading the direction )
+  if ( p_x_dim > 1 ) then
+    if ( per_width(1) <= 0.0_p_double ) then
+      if ( direction == 1 ) then
+      this%per_width(1) = xmax( g_space, 2 ) - xmin( g_space, 2 )
+      else
+      this%per_width(1) = xmax( g_space, 1 ) - xmin( g_space, 1 )
+      endif
+    else
+      this%per_width(1) =  per_width(1)
+    endif
+
+    if ( p_x_dim == 3 ) then
+      if ( per_width(per_ndim) <= 0.0_p_double ) then
+        if ( direction /= 3 ) then
+        this%per_width(per_ndim) = xmax( g_space, 3 ) - xmin( g_space, 3 )
+        else
+        this%per_width(per_ndim) = xmax( g_space, 2 ) - xmin( g_space, 2 )
+        endif
+      else
+        this%per_width(per_ndim) =  per_width(per_ndim)
+      endif
+    endif
+  endif
+  this%per_center(1:2)     = per_center(1:2)
+
 
   this%stud_duration = stud_duration
   if ( stud_duration > 0.0 ) then
@@ -1205,10 +1307,6 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
     endif
   endif
 
-  this%per_center(1:2)     = per_center(1:2)
-  this%per_w0(1:2)         = per_w0(1:2)
-
-
   this%k_perp(1:2)         = sin(theta(1:2)/360.0*(2.0_p_double*pi))
 
 
@@ -1257,6 +1355,11 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
     this%nt    = 1
     !laser_bandwidth = 0
     this%dt_update_speckle = -1.0
+  case ( 'zero' )
+    this%speckle_type = p_zero
+    this%nt    = 1
+    !laser_bandwidth = 0
+    this%dt_update_speckle = -1.0
   end select
 
   lbw = max( laser_bandwidth(1), laser_bandwidth(per_ndim) )
@@ -1288,7 +1391,7 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
         if ( phasemod_amplitude(j, i) > 0 ) then
           if ( mpi_node() == 0 .and. phasemod_amplitude(j, i) < pi ) then
             write(0,*)  ""
-            write(0,*)  "   Warning: phasemod_amplitude(", j,',',i, ") smaller than PI"
+            write(0,*)  "  zpulse_speckle: Warning: phasemod_amplitude(", j,',',i, ") smaller than PI"
             if ( fm(j, i) == 1.0 ) then
               write(0,*)  "   laser_bandwidth=", laser_bandwidth, " unachievable."
             endif
@@ -1502,12 +1605,12 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
 
   else
 
-    if ( this%speckle_type /= p_rpp .and. this%speckle_type /= p_cpp ) then
+    if ( this%speckle_type /= p_rpp .and. this%speckle_type /= p_cpp .and. this%speckle_type /= p_zero ) then
       if ( mpi_node() == 0 ) then
         write(0,*)  ""
         write(0,*)  "   Error in zpulse_speckle parameters"
         write(0,*)  "   laser_bandwidth must be greater than 0 unless"
-        write(0,*)  "   'rpp' or 'cpp' speckle_type is used"
+        write(0,*)  "   'zero', 'rpp' or 'cpp' speckle_type is used"
         write(0,*)  "   aborting..."
       endif
       stop
@@ -1528,7 +1631,7 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
     endif
   enddo
   do i = 1, p_x_dim-1
-    this%pdk(i) = 2*PI / xmax(g_space, this%per_dir(i))
+    this%pdk(i) = 2*PI / this%per_width(1) / this%omega0
   enddo
 
 end subroutine read_input_zpulse_speckle
@@ -1546,6 +1649,8 @@ subroutine init_static_modes_12d( this, ti, b, g_x_range, nx_p_min, no_co )
   integer          :: i, hmode, imode1, ind1
   real( p_double ) :: r, r2, ldxp, rmin, ph, fac, fnumber, curvature, curvature2
   real( p_double ) :: r_norm, r2_norm, env, env2
+  real(p_double), dimension(1):: pp
+  real(p_double), dimension(2):: beam_edge
 
   if ( p_x_dim == 1 ) then
     ldxp = 0.0
@@ -1559,43 +1664,68 @@ subroutine init_static_modes_12d( this, ti, b, g_x_range, nx_p_min, no_co )
     case( p_quadratic, p_quartic )
       rmin = rmin + ldxp*0.5_p_double
     end select
-    fnumber = 0.5 * (g_x_range(p_upper,this%per_dir(1)) - g_x_range(p_lower,this%per_dir(1))) * &
-             &    this%omega0 / pi / this%n_speckle(1)
+    fnumber = 0.5*this%per_width(1)*this%omega0/pi/this%n_speckle(1)
+    beam_edge(p_lower) = this%per_center(1) - 0.5*this%per_width(1)
+    beam_edge(p_upper) = beam_edge(p_lower) + this%per_width(1)
   endif
-
 
   hmode = int(this%n_speckle(1) / 2)
   fac = 1.0_p_double / sqrt( real(this%n_speckle(1), p_double) )
 
   do ind1 = 1, this%per_lnx(1)
     i = 1
-    r = rmin + (ind1-2) * ldxp
-    r2 = r + ldxp/2.0_p_double
+    pp(1) = rmin + (ind1-2)*ldxp
+    if (pp(1) < beam_edge(p_lower)) then
+      this%per_mode_2d(1:4, 1:this%n_speckle(1), ind1) = 0.0
+      cycle
+    else if (pp(1) > beam_edge(p_upper)) then
+      this%per_mode_2d(1:4, 1:this%n_speckle(1), ind1) = 0.0
+      cycle
+    end if
+
+    r = pp(1) - this%per_center(1)
+    r2 = r + ldxp * 0.5_p_double
 
     if ( p_x_dim == 1 ) then
       curvature = 0.0
     else
-      curvature = this%omega0 * (this%lon_focus + r * this%k_perp(1)) * 0.5 / (fnumber * fnumber)
-      curvature2 = this%omega0 * (this%lon_focus + r2 * this%k_perp(1)) * 0.5 / (fnumber * fnumber)
+      curvature = this%omega0 * (this%lon_focus * this%pdk(1) * this%pdk(1)) * 0.5
+      curvature2 = this%omega0 * (this%lon_focus * this%pdk(1) * this%pdk(1)) * 0.5
     endif
 
+    select case ( this%per_type )
+    case ( p_supergaussian )
+      r_norm = abs(r) / this%per_w0(1)
+      r2_norm = abs(r2) / this%per_w0(1)
+      env = p_env(r_norm, this%per_gaussian_order)
+      env2 = p_env(r2_norm, this%per_gaussian_order)
 
-    if(this%per_w0(1) .ne. 0) then
-      r_norm = abs(r - this%per_center(1)) / this%per_w0(1)
-      r2_norm = abs(r2 - this%per_center(1)) / this%per_w0(1)
-      env = p_env(r_norm)
-      env2 = p_env(r2_norm)
-    else
+    case ( p_sinc )
+      r_norm = abs(r) / this%per_w0(1)
+      r2_norm = abs(r2) / this%per_w0(1)
+      env = sinc(r_norm)
+      env2 = sinc(r2_norm)
+
+    case ( p_math_func )
+      env = eval( this%per_math_func, pp )
+      pp(1) =  pp(1) + ldxp*0.5_p_double
+      env2 = eval( this%per_math_func, pp )
+
+    case ( p_const )
       env = 1.
       env2 = 1.
-    endif
+
+    case default
+      env =  1.
+      env2 =  1.
+    end select
 
     do imode1 = hmode - this%n_speckle(1) + 1, hmode
-      ph                           = imode1 * ( this%pdk(1)*r + imode1 * curvature )
+      ph                           = imode1 * ( imode1 * curvature - this%pdk(1)*r )
       this%per_mode_2d(1, i, ind1) = cos(ph) * fac * env
       this%per_mode_2d(2, i, ind1) = sin(ph) * fac * env
 
-      ph                           = imode1 * ( this%pdk(1)*r2 + imode1 * curvature2 )
+      ph                           = imode1 * ( imode1 * curvature2 - this%pdk(1)*r2 )
       this%per_mode_2d(3, i, ind1) = cos(ph) * fac * env2
       this%per_mode_2d(4, i, ind1) = sin(ph) * fac * env2
       i = i + 1
@@ -1623,14 +1753,13 @@ subroutine init_static_modes_3d( this, ti, b, g_x_range, nx_p_min, no_co )
   real( p_double ) :: ph, fac, fnumber, curvature, r_norm, r2_norm, k_cs, env, env2
 
   hmode1    = int(this%n_speckle(1) / 2)
-  hmode2    = int(this%n_speckle(2) / 2)
-  fnumber   = 0.5 * (g_x_range(p_upper,this%per_dir(1)) - g_x_range(p_lower,this%per_dir(1))) * &
-              &    this%omega0 / pi / this%n_speckle(1)
+  hmode2    = int(this%n_speckle(per_ndim) / 2)
+  fnumber = 0.5*this%per_width(1)*this%omega0/pi/this%n_speckle(1)
 
   ldxp(1)   = b%dx(this%per_dir(1))
-  ldxp(2)   = b%dx(this%per_dir(2))
+  ldxp(2)   = b%dx(this%per_dir(per_ndim))
   rmin(1)   = g_x_range(p_lower,this%per_dir(1)) + (nx_p_min(this%per_dir(1))-1)*ldxp(1)
-  rmin(2)   = g_x_range(p_lower,this%per_dir(2)) + (nx_p_min(this%per_dir(2))-1)*ldxp(2)
+  rmin(2)   = g_x_range(p_lower,this%per_dir(per_ndim)) + (nx_p_min(this%per_dir(per_ndim))-1)*ldxp(2)
 
   select case( this%interpolation )
   case( p_linear, p_cubic )
@@ -1640,9 +1769,9 @@ subroutine init_static_modes_3d( this, ti, b, g_x_range, nx_p_min, no_co )
     rmin(2) = rmin(2) + ldxp(2)*0.5_p_double
   end select
 
-  fac       = 1.0_p_double / sqrt( real(product(this%n_speckle(1:2)), p_double) )
+  fac       = 1.0_p_double / sqrt( real(product(this%n_speckle(1:per_ndim)), p_double) )
 
-  do ind2 = 1, this%per_lnx(2)
+  do ind2 = 1, this%per_lnx(per_ndim)
     r(2)  = rmin(2) + (ind2-2) * ldxp(2)
     r2(2) = r(2) + ldxp(2)/2.0_p_double
 
@@ -1652,7 +1781,7 @@ subroutine init_static_modes_3d( this, ti, b, g_x_range, nx_p_min, no_co )
 
       i = 1
 
-      if(this%per_w0(1) .ne. 0 .and. this%per_w0(2) .ne. 0) then
+      if(this%per_w0(1) .gt. 0 .and. this%per_w0(2) .gt. 0) then
         r_norm = sqrt(((r(1) - this%per_center(1)) / this%per_w0(1))**2 + &
                     & ((r(2) - this%per_center(2)) / this%per_w0(2))**2)
         r2_norm = sqrt(((r2(1) - this%per_center(1)) / this%per_w0(1))**2 + &
@@ -1668,17 +1797,17 @@ subroutine init_static_modes_3d( this, ti, b, g_x_range, nx_p_min, no_co )
       curvature = this%omega0 * (this%lon_focus + k_cs * r(1) + &
                               &  this%k_perp(2) * r(2)) * 0.5 / (fnumber * fnumber)
 
-      do imode2 = hmode2 - this%n_speckle(2) + 1, hmode2
+      do imode2 = hmode2 - this%n_speckle(per_ndim) + 1, hmode2
 
         do imode1 = hmode1 - this%n_speckle(1) + 1, hmode1
 
           ph = imode1 * ( this%pdk(1)*r(1) + imode1 * curvature ) + &
-            &   imode2 * ( this%pdk(2)*r2(2) + imode2 * curvature )
+            &   imode2 * ( this%pdk(per_ndim)*r2(2) + imode2 * curvature )
           this%per_mode_3d(1, i, ind1, ind2) = cos(ph) * fac * env
           this%per_mode_3d(2, i, ind1, ind2) = sin(ph) * fac * env
 
           ph = imode1 * ( this%pdk(1)*r2(1) + imode1 * curvature ) + &
-            &   imode2 * ( this%pdk(2)*r(2) + imode2 * curvature )
+            &   imode2 * ( this%pdk(per_ndim)*r(2) + imode2 * curvature )
           this%per_mode_3d(3, i, ind1, ind2) = cos(ph) * fac * env2
           this%per_mode_3d(4, i, ind1, ind2) = sin(ph) * fac * env2
 
@@ -1691,7 +1820,7 @@ subroutine init_static_modes_3d( this, ti, b, g_x_range, nx_p_min, no_co )
   enddo
 
   call update_speckle_pattern_3d(this%per_wall_3d, this%per_mode_3d, this%buff_3d(:, :, :, ti), &
-                  this%n_speckle(1:2), this%per_lnx(1:2))
+                  this%n_speckle(1:per_ndim), this%per_lnx(1:per_ndim))
 end subroutine init_static_modes_3d
 !-----------------------------------------------------------------------------------------
 
@@ -1734,7 +1863,7 @@ subroutine init_zpulse_speckle( this, restart, t, dt, b, g_space, nx_p_min, no_c
       this%per_lnx(1) = 1
     else
       do i = 1, p_x_dim-1
-        this%per_lnx(j) = b%nx_( this%per_dir(i) ) + 3
+        this%per_lnx(j) = b%nx_( this%per_dir(i) ) + 2
         j = j + 1
       enddo
     endif
@@ -1776,23 +1905,23 @@ subroutine init_zpulse_speckle( this, restart, t, dt, b, g_space, nx_p_min, no_c
       case ( 3 )
         if ( this%speckle_type == p_ssd ) then
 
-          call alloc( this%buff_3d, (/ 2, this%n_speckle(1), this%n_speckle(2), 1 /) )
+          call alloc( this%buff_3d, (/ 2, this%n_speckle(1), this%n_speckle(per_ndim), 1 /) )
 
           select case( this%bandwidth_type )
           case ( p_gaussian_spectrum, p_lorentzian_spectrum )
             call alloc( this%buff_1d, (/ 3, this%nt /) )
           case ( p_line_spectrum )
-            call alloc( this%pmp_3d, (/ max(this%nfm(1), this%nfm(2)), 2 /) )
+            call alloc( this%pmp_3d, (/ max(this%nfm(1), this%nfm(per_ndim)), 2 /) )
           end select
 
         else
 
-          call alloc( this%buff_3d, (/ 2, this%n_speckle(1), this%n_speckle(2), this%nt /) )
+          call alloc( this%buff_3d, (/ 2, this%n_speckle(1), this%n_speckle(per_ndim), this%nt /) )
 
         endif
-        call alloc( this%pp_3d, (/ this % n_speckle(1), this % n_speckle(2) /) )
-        call alloc( this%per_wall_3d, (/ 4, this%per_lnx(1), this%per_lnx(2) /) )
-        call alloc( this%per_mode_3d, (/ 4, this%n_speckle(1)*this%n_speckle(2), this%per_lnx(1), this%per_lnx(2) /) )
+        call alloc( this%pp_3d, (/ this % n_speckle(1), this % n_speckle(per_ndim) /) )
+        call alloc( this%per_wall_3d, (/ 4, this%per_lnx(1), this%per_lnx(per_ndim) /) )
+        call alloc( this%per_mode_3d, (/ 4, this%n_speckle(1)*this%n_speckle(per_ndim), this%per_lnx(1), this%per_lnx(per_ndim) /) )
       end select
 
       select case ( this%speckle_type )
@@ -1835,9 +1964,9 @@ subroutine init_zpulse_speckle( this, restart, t, dt, b, g_space, nx_p_min, no_c
             call update_ssd_buffer_2d( this%buff_2d, this%pp_2d, this%pmp_2d, this%phasemod_amplitude(:,1), this%pm_bw(:,1), &
                             &          this%nfm(1), this%n_speckle(1), inj_time, this%beamlet_delay(1) )
           case ( 3 )
-            call new_modulation_phase_3d( this%pmp_3d, this%nfm(1:2), this%rbuff )
-            call update_ssd_buffer_3d( this%buff_3d, this%pp_3d, this%pmp_3d, this%phasemod_amplitude(:,1:2), this%pm_bw(:,1:2), &
-                            &          this%nfm(1:2), this%n_speckle(1:2), inj_time, this%beamlet_delay(1:2) )
+            call new_modulation_phase_3d( this%pmp_3d, this%nfm(1:per_ndim), this%rbuff )
+            call update_ssd_buffer_3d( this%buff_3d, this%pp_3d, this%pmp_3d, this%phasemod_amplitude(:,1:per_ndim), this%pm_bw(:,1:per_ndim), &
+                            &          this%nfm(1:per_ndim), this%n_speckle(1:per_ndim), inj_time, this%beamlet_delay(1:per_ndim) )
           end select
 
         case ( p_gaussian_spectrum )
@@ -1870,8 +1999,8 @@ subroutine init_zpulse_speckle( this, restart, t, dt, b, g_space, nx_p_min, no_c
           if ( p_x_dim == 3 ) then
             this%buff_1d(2, 1) = this%rbuff%genrand_gaussian()
             do i = 2, this%nt
-              this%buff_1d(2, i) = ar1process( this%buff_1d(2, i-1), this%ar1_rho(2), &
-                                                this%ar1_sigma(2), this%rbuff )
+              this%buff_1d(2, i) = ar1process( this%buff_1d(2, i-1), this%ar1_rho(per_ndim), &
+                                                this%ar1_sigma(per_ndim), this%rbuff )
             enddo
           endif
 
@@ -1879,9 +2008,9 @@ subroutine init_zpulse_speckle( this, restart, t, dt, b, g_space, nx_p_min, no_c
             tb    = floor(inj_time/this%dt_update_speckle)
             ind1  = floor(this%beamlet_delay(1) / this%dt_update_speckle)*this%n_speckle(1)
             if ( p_x_dim == 3 ) then
-              ind2 = floor(this%beamlet_delay(2) / this%dt_update_speckle)*this%n_speckle(2)
+              ind2 = floor(this%beamlet_delay(per_ndim) / this%dt_update_speckle)*this%n_speckle(per_ndim)
               call fastforward( this%buff_1d, this%nt, tb, (/ ind1, ind2 /), &
-                              this%ar1_rho(1:2), this%ar1_sigma(1:2), this%rbuff )
+                              this%ar1_rho(1:per_ndim), this%ar1_sigma(1:per_ndim), this%rbuff )
             else
               call fastforward( this%buff_1d, this%nt, tb, ind1, &
                               this%ar1_rho(1), this%ar1_sigma(1), this%rbuff )
@@ -1899,7 +2028,7 @@ subroutine init_zpulse_speckle( this, restart, t, dt, b, g_space, nx_p_min, no_c
 
         end select
 
-      case ( p_cpp, p_rpp )
+      case ( p_cpp, p_rpp, p_zero )
         call new_phase_plate( this )
       end select
 
@@ -2344,7 +2473,7 @@ subroutine update_and_get_buffer_index_3d( this, ti, dt )
         ti = 1
         do i = 1, 2
           call ar1proc( this%buff_3d(i, :, :, 1), this%ar1_rho(1), &
-                        this%ar1_sigma(1), this%n_speckle(1:2), this%rbuff )
+                        this%ar1_sigma(1), this%n_speckle(1:per_ndim), this%rbuff )
         enddo
       end select
 
@@ -2356,9 +2485,9 @@ subroutine update_and_get_buffer_index_3d( this, ti, dt )
       case ( p_lorentzian_spectrum )
         ti = 1
         call ar1proc( this%pp_3d, this%ar1_rho(1), &
-                        this%ar1_sigma(1), this%n_speckle(1:2), this%rbuff )
+                        this%ar1_sigma(1), this%n_speckle(1:per_ndim), this%rbuff )
         do i = 1, this%n_speckle(1)
-          do j = 1, this%n_speckle(2)
+          do j = 1, this%n_speckle(per_ndim)
             this%buff_3d(1, i, j, 1) = cos( this%phasemod_amplitude(1, 1) * this%pp_3d(i, j) )
             this%buff_3d(2, i, j, 1) = sin( this%phasemod_amplitude(1, 1) * this%pp_3d(i, j) )
           enddo
@@ -2434,7 +2563,7 @@ subroutine launch_em_speckle_1d( this, b, t, dt, no_co )
 
   amp = 2.0_p_k_fld * this%omega0 * this%a0 * this % t_envelope( this % inj_time ) * &
              &  rdtdx * speckle_envelope( z_center, this%omega0, this%phase0, this%per_wall_2d(1:2, 1), &
-                    & 0.0_p_double, this%propagation, this%chirp_order, this%chirp_coefs, this%chirp_period )
+                    & this%inj_time, this%propagation, this%chirp_order, this%chirp_coefs, this%chirp_period )
 
 
   b%f1(2, inpos) = b%f1(2, inpos) + real( amp * sin_pol, p_k_fld )
@@ -2491,8 +2620,8 @@ subroutine launch_em_speckle_2d( this, b, g_space, nx_p_min, t, dt, no_co )
    prop_sign = -1.0_p_double
 
   endif
-   z =  g_x_range(active_wall,this%direction)
    this % inj_time = t - this%launch_time
+   z = this % lon_focus - this % inj_time
 
   if ( no_co % on_edge(this%direction, active_wall) ) then
 
@@ -2589,6 +2718,7 @@ subroutine launch_em_speckle_3d( this, b, g_space, nx_p_min, t, dt, no_co )
   ! executable statements
 
   this % inj_time = t - this%launch_time
+  z = this % lon_focus - this % inj_time
   call get_x_bnd( g_space, g_x_range )
 
   if (this%propagation == p_forward) then
@@ -2596,13 +2726,11 @@ subroutine launch_em_speckle_3d( this, b, g_space, nx_p_min, t, dt, no_co )
     inpos = 1
     prop_sign = 1.0_p_double
 
-    z =  g_x_range(p_lower,this%direction)
   else
     inj_node = nx( no_co, this%direction )
     inpos = b % nx_( this%direction)
     prop_sign = -1.0_p_double
 
-    z =  - g_x_range(p_upper,this%direction)
   endif
 
   if ( my_ngp( no_co, this%direction) == inj_node ) then
@@ -2627,7 +2755,7 @@ subroutine launch_em_speckle_3d( this, b, g_space, nx_p_min, t, dt, no_co )
     lenv = amp * this % t_envelope( this % inj_time )
     z_center = this%lon_center()
     rmin(1) = g_x_range(p_lower, this%per_dir(1)) + real(nx_p_min(this%per_dir(1))-1, p_double) * b%dx(this%per_dir(1))
-    rmin(2) = g_x_range(p_lower, this%per_dir(2)) + real(nx_p_min(this%per_dir(2))-1, p_double) * b%dx(this%per_dir(2))
+    rmin(2) = g_x_range(p_lower, this%per_dir(per_ndim)) + real(nx_p_min(this%per_dir(per_ndim))-1, p_double) * b%dx(this%per_dir(per_ndim))
     c(1:2) = sqrt(1. - this%k_perp(1:2)**2)
     cs = sqrt(1. - this%k_perp(2)**2) * this%k_perp(1)
 
@@ -2637,18 +2765,18 @@ subroutine launch_em_speckle_3d( this, b, g_space, nx_p_min, t, dt, no_co )
     case( p_quadratic, p_quartic )
       z = z + ldx*0.5_p_double
       rmin(1) = rmin(1) + b%dx(this%per_dir(1))*0.5_p_double
-      rmin(2) = rmin(2) + b%dx(this%per_dir(2))*0.5_p_double
+      rmin(2) = rmin(2) + b%dx(this%per_dir(per_ndim))*0.5_p_double
     end select
 
-    do ip2 = 0, this%per_lnx(2) - 1
-      r_local(1) = (rmin(2) + real(ip2, p_double) * real(b%dx(this%per_dir(2)), p_double)) * this%k_perp(2)
+    do ip2 = 0, this%per_lnx(per_ndim) - 1
+      r_local(1) = (rmin(2) + real(ip2, p_double) * real(b%dx(this%per_dir(per_ndim)), p_double)) * this%k_perp(2)
       do ip1 = 0, this%per_lnx(1) - 1
 
         r_local(2) = z + r_local(1) + (rmin(1) + real(ip1, p_double) * real(b%dx(this%per_dir(1)), p_double)) * cs
         b0  = lenv   * rdtdx * speckle_envelope( z_center, this%omega0, this%phase0, this%per_wall_3d(1:2, ip1+1, ip2+1), &
-                        & r_local(2), this%propagation, this%chirp_order, this%chirp_coefs, this%chirp_period ) * sin_pol
+                        & z + r_local(2), this%propagation, this%chirp_order, this%chirp_coefs, this%chirp_period ) * sin_pol
         b90 = lenv   * rdtdx * speckle_envelope( z_center, this%omega0, this%phase0, this%per_wall_3d(3:4, ip1+1, ip2+1), &
-                        & r_local(2), this%propagation, this%chirp_order, this%chirp_coefs, this%chirp_period ) * cos_pol
+                        & z + r_local(2), this%propagation, this%chirp_order, this%chirp_coefs, this%chirp_period ) * cos_pol
 
         select case (this%direction)
 
@@ -2679,20 +2807,41 @@ end subroutine launch_em_speckle_3d
 
 !-----------------------------------------------------------------------------------------
 !-----------------------------------------------------------------------------------------
-real(p_double) function p_env(rad)
-real (p_double) rad
+real(p_double) function p_env(rad, order)
+real (p_double) :: rad
+integer, optional :: order
 
 ! local variable
 real (p_double) ab_rad
+integer :: od
 
-ab_rad = abs(rad)
-if(ab_rad.lt. 1.0) then
-    p_env = (1.0-2.5*ab_rad**2+2.5*ab_rad**4-ab_rad**5)
+if ( present( order ) ) then
+  od = order
 else
-    p_env = 0.0
+  od = 2
 endif
 
+ab_rad = abs(rad)
+p_env = exp( - ab_rad**order )
+! if(ab_rad.lt. 1.0) then
+!     p_env = (1.0-2.5*ab_rad**2+2.5*ab_rad**4-ab_rad**5)
+! else
+!     p_env = 0.0
+! endif
+
 end function p_env
+
+elemental real(p_double) function sinc(x)
+!  Sine cardinal (sinc) function.
+implicit none
+real(p_double), intent(in) :: x
+
+if ( abs(x) < 1e-15_p_double ) then
+   sinc = 1.0_p_double
+else
+   sinc = sin(x)/x
+end if
+end function sinc
 
 end module m_zpulse_speckle
 

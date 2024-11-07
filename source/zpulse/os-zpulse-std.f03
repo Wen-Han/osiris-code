@@ -41,6 +41,9 @@ integer, parameter :: p_hermite_gaussian_astigmatic = 2 ! astigmatic beam
 integer, parameter :: p_bessel            = 3              ! bessel
 integer, parameter :: p_gaussian_asym     = 4              ! asymetric gaussian
 integer, parameter :: p_laguerre_gaussian = 5              ! laguerre-gaussian beam
+integer, parameter :: p_sinc              = 6   ! sinc
+integer, parameter :: p_math_func         = 7   ! math function (need it to avoid ambiguity in the check_dimenionality routine)
+integer, parameter :: p_supergaussian     = 8   ! super gaussian
 
 integer, parameter :: p_gaussian       = 1  ! gaussian
 integer, parameter :: p_polynomial     = 2  ! polynomial
@@ -147,6 +150,7 @@ public :: t_zpulse
 
 public :: p_zpulse_bnormal
 public :: p_max_chirp_order, p_polynomial, p_sin2, p_gaussian, p_func, p_const
+public :: p_sinc, p_math_func, p_supergaussian
 public :: p_forward, p_backward
 public :: p_hermite_gaussian, p_hermite_gaussian_astigmatic, p_laguerre_gaussian, p_plane, p_gaussian_asym
 
