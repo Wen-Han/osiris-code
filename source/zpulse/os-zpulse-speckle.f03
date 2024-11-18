@@ -930,7 +930,7 @@ subroutine read_input_zpulse_speckle( this, input_file, g_space, bnd_con, period
   endif
 
   this%a0         = a0
-  this%omega0     = omega0
+  this%omega0     = omega0 *  0.5_p_double
   this%phase0     = real( phase * pi_180, p_double )
   this%lon_focus  = lon_focus
 
